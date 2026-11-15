@@ -401,7 +401,7 @@ with tab_live:
             st.markdown("""
             <div class="content-card">
                 <h3>Live Session Controls</h3>
-                <p style="font-size: 0.85rem; color: #64748B;">Adjust recognition sensitivity and input mode.</p>
+                <p style="font-size: 0.85rem; color: #64748B;">Live continuous camera attendance stream.</p>
             """, unsafe_allow_html=True)
 
             tau_live = st.slider(
@@ -412,36 +412,28 @@ with tab_live:
                 help="Faces with similarity >= τ are identified; otherwise marked as Unknown."
             )
 
-            # Camera input source selection
-            cam_mode = st.radio(
-                "Camera Input Source",
-                ["Browser Camera (Cloud & Mobile)", "Local OpenCV VideoCapture (Lab PC)"],
-                index=0,
-                help="Use Browser Camera on Streamlit Cloud or phones. Use Local OpenCV for high-speed live streams on lab desktops."
-            )
+            camera_idx = st.number_input("Camera Device Index", min_value=0, max_value=5, value=0, step=1,
+                                         help="Default 0 is your primary webcam. Use 1 or 2 for external USB cameras.")
+            frame_skip = st.slider("Process Every Nth Frame", min_value=1, max_value=8, value=3,
+                                   help="Optimizes inference speed on CPU.")
 
-            if cam_mode == "Local OpenCV VideoCapture (Lab PC)":
-                camera_idx = st.number_input("Camera Device Index", min_value=0, max_value=5, value=0, step=1)
-                frame_skip = st.slider("Process Every Nth Frame", min_value=1, max_value=8, value=3,
-                                       help="Optimizes inference speed on CPU.")
+            st.markdown("---")
+            if "live_running" not in st.session_state:
+                st.session_state.live_running = False
 
-                st.markdown("---")
-                if "live_running" not in st.session_state:
-                    st.session_state.live_running = False
+            c_btn1, c_btn2 = st.columns(2)
+            with c_btn1:
+                start_clicked = st.button("▶ Start Live Feed", disabled=st.session_state.live_running)
+            with c_btn2:
+                stop_clicked = st.button("⏹ Stop Feed & Save", disabled=not st.session_state.live_running)
 
-                c_btn1, c_btn2 = st.columns(2)
-                with c_btn1:
-                    start_clicked = st.button("▶ Start Session", disabled=st.session_state.live_running)
-                with c_btn2:
-                    stop_clicked = st.button("⏹ Stop & Save", disabled=not st.session_state.live_running)
+            if start_clicked:
+                st.session_state.live_running = True
+                st.rerun()
 
-                if start_clicked:
-                    st.session_state.live_running = True
-                    st.rerun()
-
-                if stop_clicked:
-                    st.session_state.live_running = False
-                    st.rerun()
+            if stop_clicked:
+                st.session_state.live_running = False
+                st.rerun()
 
             if "last_saved_file" in st.session_state and st.session_state.last_saved_file:
                 st.success(f"Session saved: `{os.path.basename(st.session_state.last_saved_file)}`")
@@ -451,120 +443,84 @@ with tab_live:
         with col_feed:
             st.markdown("""
             <div class="content-card">
-                <h3>Attendance Camera</h3>
+                <h3>Live Camera Feed</h3>
             """, unsafe_allow_html=True)
 
-            if cam_mode == "Browser Camera (Cloud & Mobile)":
-                st.info("📸 **Take a snapshot from your browser / phone camera below** to recognize faces and mark attendance on the cloud:")
-                img_snapshot = st.camera_input("Capture student face")
+            frame_placeholder = st.empty()
 
-                if img_snapshot is not None:
-                    mtcnn, resnet = cached_load_models()
-                    gallery_embs, gallery_labels = load_gallery(GALLERY_DIR)
-                    logger = AttendanceLogger(LOG_DIR, gallery_labels)
+            if st.session_state.get("live_running", False):
+                mtcnn, resnet = cached_load_models()
+                gallery_embs, gallery_labels = load_gallery(GALLERY_DIR)
+                logger = AttendanceLogger(LOG_DIR, gallery_labels)
 
-                    # Read snapshot as OpenCV image
-                    file_bytes = np.asarray(bytearray(img_snapshot.read()), dtype=np.uint8)
-                    frame = cv2.imdecode(file_bytes, 1)
+                # Robust multi-backend camera capture for Windows and Linux
+                cap = cv2.VideoCapture(int(camera_idx), cv2.CAP_DSHOW)
+                if not cap.isOpened():
+                    cap = cv2.VideoCapture(int(camera_idx))
 
-                    pil_img = opencv_frame_to_pil(frame)
-                    face_tensors, boxes = detect_faces(pil_img, mtcnn)
+                if not cap.isOpened():
+                    st.error(
+                        f"❌ Could not open webcam at index {camera_idx}.\n\n"
+                        "• Ensure no other application (Zoom, Teams, or another browser tab) is locking your webcam.\n"
+                        "• If you have an external USB webcam, try changing Camera Index to 1 or 2.\n"
+                        "• When running locally, launch via `run_app.bat` or `streamlit run app.py`."
+                    )
+                    st.session_state.live_running = False
+                else:
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-                    recognized_count = 0
-                    if face_tensors is not None and boxes is not None:
-                        for face_tensor, box in zip(face_tensors, boxes):
-                            embedding = get_embedding(face_tensor, resnet)
-                            name, sim = identify(embedding, gallery_embs, gallery_labels, tau_live)
-                            recognised = name != "Unknown"
-                            if recognised:
-                                logger.mark_present(name)
-                                recognized_count += 1
+                    frame_count = 0
+                    last_boxes = []
+                    last_identities = []
+
+                    while st.session_state.live_running:
+                        ret, frame = cap.read()
+                        if not ret:
+                            st.error("Webcam feed lost.")
+                            break
+
+                        frame_count += 1
+
+                        if frame_count % frame_skip == 0:
+                            h, w = frame.shape[:2]
+                            scale = 0.5
+                            small_frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
+                            pil_small = opencv_frame_to_pil(small_frame)
+
+                            face_tensors, boxes = detect_faces(pil_small, mtcnn)
+
+                            last_boxes = []
+                            last_identities = []
+                            if face_tensors is not None and boxes is not None:
+                                for face_tensor, sbox in zip(face_tensors, boxes):
+                                    orig_box = [coord / scale for coord in sbox]
+                                    embedding = get_embedding(face_tensor, resnet)
+                                    name, sim = identify(embedding, gallery_embs, gallery_labels, tau_live)
+                                    recognised = name != "Unknown"
+                                    if recognised:
+                                        is_new = logger.mark_present(name)
+                                        if is_new:
+                                            logger.save()
+                                    last_boxes.append(orig_box)
+                                    last_identities.append((name, sim, recognised))
+
+                        for box, (name, sim, recognised) in zip(last_boxes, last_identities):
                             draw_annotation(frame, box, name, sim, recognised)
 
-                        filepath = logger.save()
-                        st.session_state.last_saved_file = filepath
+                        cv2.rectangle(frame, (0, 0), (420, 40), (240, 240, 240), -1)
+                        cv2.putText(frame, f"Threshold = {tau_live:.2f} | {logger.summary()}", 
+                                    (12, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (20, 20, 20), 1)
 
-                        # Show annotated result
                         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        st.image(frame_rgb, caption=f"Result: {logger.summary()}", width="stretch")
-                        if recognized_count > 0:
-                            st.success(f"Successfully marked attendance! Saved to `{os.path.basename(filepath)}`")
-                        else:
-                            st.warning("Face marked as Unknown (below threshold τ).")
-                    else:
-                        st.warning("No face detected in the captured photo. Please try again with better lighting.")
+                        frame_placeholder.image(frame_rgb, channels="RGB")
 
+                    cap.release()
+                    filepath = logger.save()
+                    st.session_state.last_saved_file = filepath
             else:
-                # Local OpenCV mode (for local lab PC)
-                frame_placeholder = st.empty()
-
-                if st.session_state.get("live_running", False):
-                    mtcnn, resnet = cached_load_models()
-                    gallery_embs, gallery_labels = load_gallery(GALLERY_DIR)
-                    logger = AttendanceLogger(LOG_DIR, gallery_labels)
-
-                    cap = cv2.VideoCapture(int(camera_idx), cv2.CAP_DSHOW)
-                    if not cap.isOpened():
-                        cap = cv2.VideoCapture(int(camera_idx))
-
-                    if not cap.isOpened():
-                        st.error(f"Could not open webcam index {camera_idx}. If running on Streamlit Cloud, switch to 'Browser Camera' mode on the left!")
-                        st.session_state.live_running = False
-                    else:
-                        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
-                        frame_count = 0
-                        last_boxes = []
-                        last_identities = []
-
-                        while st.session_state.live_running:
-                            ret, frame = cap.read()
-                            if not ret:
-                                st.error("Webcam feed lost.")
-                                break
-
-                            frame_count += 1
-
-                            if frame_count % frame_skip == 0:
-                                h, w = frame.shape[:2]
-                                scale = 0.5
-                                small_frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
-                                pil_small = opencv_frame_to_pil(small_frame)
-
-                                face_tensors, boxes = detect_faces(pil_small, mtcnn)
-
-                                last_boxes = []
-                                last_identities = []
-                                if face_tensors is not None and boxes is not None:
-                                    for face_tensor, sbox in zip(face_tensors, boxes):
-                                        orig_box = [coord / scale for coord in sbox]
-                                        embedding = get_embedding(face_tensor, resnet)
-                                        name, sim = identify(embedding, gallery_embs, gallery_labels, tau_live)
-                                        recognised = name != "Unknown"
-                                        if recognised:
-                                            is_new = logger.mark_present(name)
-                                            if is_new:
-                                                logger.save()
-                                        last_boxes.append(orig_box)
-                                        last_identities.append((name, sim, recognised))
-
-                            for box, (name, sim, recognised) in zip(last_boxes, last_identities):
-                                draw_annotation(frame, box, name, sim, recognised)
-
-                            cv2.rectangle(frame, (0, 0), (420, 40), (240, 240, 240), -1)
-                            cv2.putText(frame, f"Threshold = {tau_live:.2f} | {logger.summary()}", 
-                                        (12, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (20, 20, 20), 1)
-
-                            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                            frame_placeholder.image(frame_rgb, channels="RGB")
-
-                        cap.release()
-                        filepath = logger.save()
-                        st.session_state.last_saved_file = filepath
-                else:
-                    st.info("Click **'▶ Start Session'** on the left to begin the live OpenCV video loop.")
+                st.info("Click **'▶ Start Live Feed'** on the left to start real-time camera recognition.")
 
             st.markdown("</div>", unsafe_allow_html=True)
 
