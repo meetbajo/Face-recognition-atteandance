@@ -41,6 +41,13 @@ from src.utils import (
 from src.attendance import identify, AttendanceLogger, draw_annotation
 from src.lfw_experiment import load_threshold
 
+try:
+    from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
+    import av
+    HAS_WEBRTC = True
+except Exception:
+    HAS_WEBRTC = False
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Page Config
 # ─────────────────────────────────────────────────────────────────────────────
@@ -412,28 +419,38 @@ with tab_live:
                 help="Faces with similarity >= τ are identified; otherwise marked as Unknown."
             )
 
-            camera_idx = st.number_input("Camera Device Index", min_value=0, max_value=5, value=0, step=1,
-                                         help="Default 0 is your primary webcam. Use 1 or 2 for external USB cameras.")
-            frame_skip = st.slider("Process Every Nth Frame", min_value=1, max_value=8, value=3,
-                                   help="Optimizes inference speed on CPU.")
+            # Determine runtime mode (Cloud WebRTC vs Local OpenCV)
+            run_mode_options = ["Cloud WebRTC Live Stream", "Local OpenCV VideoCapture (Lab PC)"]
+            selected_mode = st.radio(
+                "Stream Mode",
+                run_mode_options,
+                index=0 if HAS_WEBRTC else 1,
+                help="WebRTC streams directly from your client browser to Streamlit Cloud. Local OpenCV runs high-speed capture on your local desktop."
+            )
 
-            st.markdown("---")
-            if "live_running" not in st.session_state:
-                st.session_state.live_running = False
+            if selected_mode == "Local OpenCV VideoCapture (Lab PC)":
+                camera_idx = st.number_input("Camera Device Index", min_value=0, max_value=5, value=0, step=1,
+                                             help="Default 0 is your primary webcam. Use 1 or 2 for external USB cameras.")
+                frame_skip = st.slider("Process Every Nth Frame", min_value=1, max_value=8, value=3,
+                                       help="Optimizes inference speed on CPU.")
 
-            c_btn1, c_btn2 = st.columns(2)
-            with c_btn1:
-                start_clicked = st.button("▶ Start Live Feed", disabled=st.session_state.live_running)
-            with c_btn2:
-                stop_clicked = st.button("⏹ Stop Feed & Save", disabled=not st.session_state.live_running)
+                st.markdown("---")
+                if "live_running" not in st.session_state:
+                    st.session_state.live_running = False
 
-            if start_clicked:
-                st.session_state.live_running = True
-                st.rerun()
+                c_btn1, c_btn2 = st.columns(2)
+                with c_btn1:
+                    start_clicked = st.button("▶ Start Local Feed", disabled=st.session_state.live_running)
+                with c_btn2:
+                    stop_clicked = st.button("⏹ Stop Feed & Save", disabled=not st.session_state.live_running)
 
-            if stop_clicked:
-                st.session_state.live_running = False
-                st.rerun()
+                if start_clicked:
+                    st.session_state.live_running = True
+                    st.rerun()
+
+                if stop_clicked:
+                    st.session_state.live_running = False
+                    st.rerun()
 
             if "last_saved_file" in st.session_state and st.session_state.last_saved_file:
                 st.success(f"Session saved: `{os.path.basename(st.session_state.last_saved_file)}`")
@@ -443,84 +460,149 @@ with tab_live:
         with col_feed:
             st.markdown("""
             <div class="content-card">
-                <h3>Live Camera Feed</h3>
+                <h3>Live Video Feed</h3>
             """, unsafe_allow_html=True)
 
-            frame_placeholder = st.empty()
+            if selected_mode == "Cloud WebRTC Live Stream":
+                if not HAS_WEBRTC:
+                    st.info("ℹ️ Running in cloud mode. WebRTC library is loaded on Streamlit Cloud to receive your browser webcam stream.")
+                
+                # Cloud WebRTC live continuous video streaming
+                if HAS_WEBRTC:
+                    mtcnn, resnet = cached_load_models()
+                    gallery_embs, gallery_labels = load_gallery(GALLERY_DIR)
+                    logger = AttendanceLogger(LOG_DIR, gallery_labels)
 
-            if st.session_state.get("live_running", False):
-                mtcnn, resnet = cached_load_models()
-                gallery_embs, gallery_labels = load_gallery(GALLERY_DIR)
-                logger = AttendanceLogger(LOG_DIR, gallery_labels)
+                    class VideoProcessor(VideoTransformerBase):
+                        def __init__(self):
+                            self.frame_count = 0
+                            self.last_boxes = []
+                            self.last_identities = []
 
-                # Robust multi-backend camera capture for Windows and Linux
-                cap = cv2.VideoCapture(int(camera_idx), cv2.CAP_DSHOW)
-                if not cap.isOpened():
-                    cap = cv2.VideoCapture(int(camera_idx))
+                        def recv(self, frame):
+                            img = frame.to_ndarray(format="bgr24")
+                            self.frame_count += 1
 
-                if not cap.isOpened():
-                    st.error(
-                        f"❌ Could not open webcam at index {camera_idx}.\n\n"
-                        "• Ensure no other application (Zoom, Teams, or another browser tab) is locking your webcam.\n"
-                        "• If you have an external USB webcam, try changing Camera Index to 1 or 2.\n"
-                        "• When running locally, launch via `run_app.bat` or `streamlit run app.py`."
+                            if self.frame_count % 3 == 0:
+                                h, w = img.shape[:2]
+                                scale = 0.5
+                                small_frame = cv2.resize(img, (int(w * scale), int(h * scale)))
+                                pil_small = opencv_frame_to_pil(small_frame)
+
+                                face_tensors, boxes = detect_faces(pil_small, mtcnn)
+
+                                self.last_boxes = []
+                                self.last_identities = []
+                                if face_tensors is not None and boxes is not None:
+                                    for face_tensor, sbox in zip(face_tensors, boxes):
+                                        orig_box = [coord / scale for coord in sbox]
+                                        embedding = get_embedding(face_tensor, resnet)
+                                        name, sim = identify(embedding, gallery_embs, gallery_labels, tau_live)
+                                        recognised = name != "Unknown"
+                                        if recognised:
+                                            is_new = logger.mark_present(name)
+                                            if is_new:
+                                                logger.save()
+                                        self.last_boxes.append(orig_box)
+                                        self.last_identities.append((name, sim, recognised))
+
+                            for box, (name, sim, recognised) in zip(self.last_boxes, self.last_identities):
+                                draw_annotation(img, box, name, sim, recognised)
+
+                            cv2.rectangle(img, (0, 0), (420, 40), (240, 240, 240), -1)
+                            cv2.putText(img, f"Threshold = {tau_live:.2f} | {logger.summary()}", 
+                                        (12, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (20, 20, 20), 1)
+
+                            return av.VideoFrame.from_ndarray(img, format="bgr24")
+
+                    RTC_CONFIG = RTCConfiguration(
+                        {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
                     )
-                    st.session_state.live_running = False
+
+                    webrtc_streamer(
+                        key="attendance-stream",
+                        video_processor_factory=VideoProcessor,
+                        rtc_configuration=RTC_CONFIG,
+                        media_stream_constraints={"video": True, "audio": False},
+                    )
                 else:
-                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    st.warning("WebRTC package initializing on the server. If testing on localhost, switch to 'Local OpenCV' on the left.")
 
-                    frame_count = 0
-                    last_boxes = []
-                    last_identities = []
-
-                    while st.session_state.live_running:
-                        ret, frame = cap.read()
-                        if not ret:
-                            st.error("Webcam feed lost.")
-                            break
-
-                        frame_count += 1
-
-                        if frame_count % frame_skip == 0:
-                            h, w = frame.shape[:2]
-                            scale = 0.5
-                            small_frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
-                            pil_small = opencv_frame_to_pil(small_frame)
-
-                            face_tensors, boxes = detect_faces(pil_small, mtcnn)
-
-                            last_boxes = []
-                            last_identities = []
-                            if face_tensors is not None and boxes is not None:
-                                for face_tensor, sbox in zip(face_tensors, boxes):
-                                    orig_box = [coord / scale for coord in sbox]
-                                    embedding = get_embedding(face_tensor, resnet)
-                                    name, sim = identify(embedding, gallery_embs, gallery_labels, tau_live)
-                                    recognised = name != "Unknown"
-                                    if recognised:
-                                        is_new = logger.mark_present(name)
-                                        if is_new:
-                                            logger.save()
-                                    last_boxes.append(orig_box)
-                                    last_identities.append((name, sim, recognised))
-
-                        for box, (name, sim, recognised) in zip(last_boxes, last_identities):
-                            draw_annotation(frame, box, name, sim, recognised)
-
-                        cv2.rectangle(frame, (0, 0), (420, 40), (240, 240, 240), -1)
-                        cv2.putText(frame, f"Threshold = {tau_live:.2f} | {logger.summary()}", 
-                                    (12, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (20, 20, 20), 1)
-
-                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        frame_placeholder.image(frame_rgb, channels="RGB")
-
-                    cap.release()
-                    filepath = logger.save()
-                    st.session_state.last_saved_file = filepath
             else:
-                st.info("Click **'▶ Start Live Feed'** on the left to start real-time camera recognition.")
+                # Local OpenCV mode (Direct hardware on local machine)
+                frame_placeholder = st.empty()
+
+                if st.session_state.get("live_running", False):
+                    mtcnn, resnet = cached_load_models()
+                    gallery_embs, gallery_labels = load_gallery(GALLERY_DIR)
+                    logger = AttendanceLogger(LOG_DIR, gallery_labels)
+
+                    cap = cv2.VideoCapture(int(camera_idx), cv2.CAP_DSHOW)
+                    if not cap.isOpened():
+                        cap = cv2.VideoCapture(int(camera_idx))
+
+                    if not cap.isOpened():
+                        st.error(
+                            f"❌ Could not open webcam at index {camera_idx}.\n\n"
+                            "• If you are on the deployed website (streamlit.app), switch to **'Cloud WebRTC Live Stream'** on the left!\n"
+                            "• When running locally, ensure no other application is locking your webcam."
+                        )
+                        st.session_state.live_running = False
+                    else:
+                        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+                        frame_count = 0
+                        last_boxes = []
+                        last_identities = []
+
+                        while st.session_state.live_running:
+                            ret, frame = cap.read()
+                            if not ret:
+                                st.error("Webcam feed lost.")
+                                break
+
+                            frame_count += 1
+
+                            if frame_count % frame_skip == 0:
+                                h, w = frame.shape[:2]
+                                scale = 0.5
+                                small_frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
+                                pil_small = opencv_frame_to_pil(small_frame)
+
+                                face_tensors, boxes = detect_faces(pil_small, mtcnn)
+
+                                last_boxes = []
+                                last_identities = []
+                                if face_tensors is not None and boxes is not None:
+                                    for face_tensor, sbox in zip(face_tensors, boxes):
+                                        orig_box = [coord / scale for coord in sbox]
+                                        embedding = get_embedding(face_tensor, resnet)
+                                        name, sim = identify(embedding, gallery_embs, gallery_labels, tau_live)
+                                        recognised = name != "Unknown"
+                                        if recognised:
+                                            is_new = logger.mark_present(name)
+                                            if is_new:
+                                                logger.save()
+                                        last_boxes.append(orig_box)
+                                        last_identities.append((name, sim, recognised))
+
+                            for box, (name, sim, recognised) in zip(last_boxes, last_identities):
+                                draw_annotation(frame, box, name, sim, recognised)
+
+                            cv2.rectangle(frame, (0, 0), (420, 40), (240, 240, 240), -1)
+                            cv2.putText(frame, f"Threshold = {tau_live:.2f} | {logger.summary()}", 
+                                        (12, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (20, 20, 20), 1)
+
+                            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                            frame_placeholder.image(frame_rgb, channels="RGB")
+
+                        cap.release()
+                        filepath = logger.save()
+                        st.session_state.last_saved_file = filepath
+                else:
+                    st.info("Click **'▶ Start Local Feed'** on the left to start real-time camera recognition.")
 
             st.markdown("</div>", unsafe_allow_html=True)
 
