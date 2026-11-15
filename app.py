@@ -523,8 +523,21 @@ with tab_live:
                         key="attendance-stream",
                         video_processor_factory=VideoProcessor,
                         rtc_configuration=RTC_CONFIG,
-                        media_stream_constraints={"video": True, "audio": False},
+                        media_stream_constraints={
+                            "video": {
+                                "facingMode": "user",
+                                "width": {"ideal": 640},
+                                "height": {"ideal": 480}
+                            },
+                            "audio": False
+                        },
                     )
+
+                    # Display real-time attendance status table directly under the stream
+                    st.markdown("#### Real-Time Attendance Status")
+                    records_list = sorted(logger.records.values(), key=lambda r: r["Name"])
+                    df_status = pd.DataFrame(records_list)
+                    st.dataframe(df_status, width="stretch", hide_index=True)
                 else:
                     st.warning("WebRTC package initializing on the server. If testing on localhost, switch to 'Local OpenCV' on the left.")
 
