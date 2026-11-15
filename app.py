@@ -424,7 +424,7 @@ with tab_live:
             tau_live = st.slider(
                 "Cosine Similarity Threshold (τ)",
                 min_value=0.30, max_value=0.99,
-                value=0.60,
+                value=0.75,
                 step=0.01,
                 help="Faces with similarity >= τ are identified; otherwise marked as Unknown."
             )
@@ -515,7 +515,7 @@ with tab_live:
 
                         # Process every Nth frame for performance
                         _skip = st.session_state.get("_webrtc_frame_skip", 3)
-                        _tau = st.session_state.get("_webrtc_tau", 0.60)
+                        _tau = st.session_state.get("_webrtc_tau", 0.75)
 
                         if self.frame_count % _skip == 0:
                             h, w = img.shape[:2]
