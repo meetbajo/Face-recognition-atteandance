@@ -470,13 +470,16 @@ with tab_live:
 
                 RTC_CONFIG = RTCConfiguration(
                     {"iceServers": [
-                        # Multiple Google STUN servers for reliability
+                        # Multiple Google STUN servers
                         {"urls": ["stun:stun.l.google.com:19302"]},
                         {"urls": ["stun:stun1.l.google.com:19302"]},
                         {"urls": ["stun:stun2.l.google.com:19302"]},
                         {"urls": ["stun:stun3.l.google.com:19302"]},
                         {"urls": ["stun:stun4.l.google.com:19302"]},
-                        # Free public TURN relay (handles strict NAT/firewalls)
+                        # Additional STUN servers for redundancy
+                        {"urls": ["stun:freestun.net:3478"]},
+                        {"urls": ["stun:stun.stunprotocol.org:3478"]},
+                        # Free TURN relay — provider 1 (openrelay)
                         {
                             "urls": [
                                 "turn:openrelay.metered.ca:80",
@@ -485,6 +488,15 @@ with tab_live:
                             ],
                             "username": "openrelayproject",
                             "credential": "openrelayproject",
+                        },
+                        # Free TURN relay — provider 2 (freestun)
+                        {
+                            "urls": [
+                                "turn:freestun.net:3478",
+                                "turn:freestun.net:3479",
+                            ],
+                            "username": "free",
+                            "credential": "free",
                         },
                     ]}
                 )
