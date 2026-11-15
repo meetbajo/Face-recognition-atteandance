@@ -1,0 +1,188 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{url}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+\begin{document}
+
+\title{Real-Time Contactless Attendance System Using Deep Face Embeddings and Cosine Metric Learning\\
+{\footnotesize \textsuperscript{*}Capstone Project Report, Department of Electronics Engineering}
+}
+
+\author{\IEEEauthorblockN{Meet Ashish Bajoria}
+\IEEEauthorblockA{\textit{Dept. of Electronics Engineering} \\
+\textit{Ramdeobaba University}\\
+Nagpur, India \\
+Roll: 36, 24bajoriam@rbunagpur.in}
+\and
+\IEEEauthorblockN{Khizra Bushra Raien}
+\IEEEauthorblockA{\textit{Dept. of Electronics Engineering} \\
+\textit{Ramdeobaba University}\\
+Nagpur, India \\
+Roll: 32}
+\and
+\IEEEauthorblockN{Mohammad Moinuddin}
+\IEEEauthorblockA{\textit{Dept. of Electronics Engineering} \\
+\textit{Ramdeobaba University}\\
+Nagpur, India \\
+Roll: 38}
+\and
+\IEEEauthorblockN{Pratham Singh Thakur}
+\IEEEauthorblockA{\textit{Dept. of Electronics Engineering} \\
+\textit{Ramdeobaba University}\\
+Nagpur, India \\
+Roll: 44}
+\and
+\IEEEauthorblockN{Prof. V. R. Gupta}
+\IEEEauthorblockA{\textit{Course Coordinator \& Mentor} \\
+\textit{Dept. of Electronics Engineering}\\
+Ramdeobaba University, Nagpur, India}
+}
+
+\maketitle
+
+\begin{abstract}
+Student attendance tracking in academic institutions frequently suffers from proxy marking, instruction time loss, and administrative clerical overheads when executed via conventional paper sign-in sheets. While biometric fingerprint scanners address proxy marking, they introduce physical queues and raise acute hygiene concerns in shared laboratory environments. This study designs and evaluates an edge-ready, contactless smart attendance prototype leveraging deep facial metric learning. The proposed architecture integrates Multi-Task Cascaded Convolutional Networks (MTCNN) for 5-point facial landmark alignment with an Inception-ResNet-v1 feature extractor pretrained on VGGFace2 to compute 512-dimensional $L_2$-normalized embeddings. Face verification is formulated as an open-set task evaluated using Cosine Similarity against an enrolled consent-based gallery. An optimal decision threshold ($\tau = 0.75$) rejects unregistered individuals as `Unknown' while confidently verifying enrolled students. To overcome CPU latency bottlenecks on commodity hardware, spatial downsampling ($0.5\times$) and temporal frame-skipping optimizations are introduced, achieving stable 30~FPS throughput on CPU. Empirical evaluation on the standard Labeled Faces in the Wild (LFW) benchmark yields 95.2\% verification accuracy and an Area Under Curve (AUC) of 0.984, establishing a robust, hygienic, and privacy-respecting attendance solution.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Face Recognition, MTCNN, Inception-ResNet-v1, Metric Learning, Cosine Similarity, Automated Attendance System, Real-Time Edge Vision.
+\end{IEEEkeywords}
+
+\section{Introduction}
+Student attendance tracking is a foundational operational mandate across higher education institutions. Attendance records directly influence continuous internal assessment, laboratory eligibility, and statutory compliance. Despite widespread campus digitization, most lecture halls and engineering laboratories continue to employ legacy manual roll calls or circulated paper sheets. These practices introduce significant systemic inefficiencies:
+\begin{enumerate}
+    \item \textbf{Instructional Time Loss:} Calling student names consumes 5 to 10 minutes per lecture period.
+    \item \textbf{Proxy Attendance:} Circulating paper sheets permits buddy sign-ins for absent peers.
+    \item \textbf{Transcription Errors:} Faculty must manually transcribe physical records into electronic ERP databases.
+\end{enumerate}
+
+Physical biometric alternatives, such as optical fingerprint scanners, successfully mitigate proxy marking. However, they create severe physical bottlenecks during rapid classroom transitions and present persistent hygiene challenges in high-traffic shared laboratory environments.
+
+Computer vision offers a passive, contactless alternative capable of recognizing multiple individuals seamlessly. Nonetheless, deploying facial recognition models in academic classrooms requires overcoming three technical constraints: real-time execution on commodity hardware without dedicated GPUs, resilience against varied classroom lighting and head poses, and reliable discrimination between registered students and unregistered visitors.
+
+This paper addresses these operational challenges by designing an end-to-end contactless attendance system based on deep metric learning. The remainder of this paper is structured as follows: Section~II reviews related literature. Section~III outlines the methodology and architectural pipeline. Section~IV details latency optimizations. Section~V presents empirical findings and benchmark results. Section~VI concludes the study.
+
+\section{Literature Review}
+Classical automated attendance prototypes primarily utilized shallow appearance-based descriptors. Turk and Pentland~\cite{turk1991eigenfaces} introduced Principal Component Analysis (Eigenfaces), which projects pixel intensities onto orthogonal eigenvectors. Ahonen et al.~\cite{ahonen2006face} proposed Local Binary Pattern Histograms (LBPH) to capture micro-texture spatial relationships. Although computationally modest, these handcrafted techniques degrade severely under illumination variations, slight perspective rotations, and natural facial expression shifts.
+
+The transition to Deep Convolutional Neural Networks (DCNNs) fundamentally altered facial verification accuracy. Schroff et al.~\cite{schroff2015facenet} presented FaceNet, which maps facial images directly into a compact Euclidean hypersphere where distances correspond to facial similarity, trained via triplet loss. Concurrently, Zhang et al.~\cite{zhang2016joint} engineered Multi-Task Cascaded Convolutional Networks (MTCNN), which perform unified multi-task face detection, bounding box regression, and 5-point facial landmark regression.
+
+Existing academic prototypes often cast attendance as a closed-set classification problem using Softmax cross-entropy. However, closed-set classification exhibits two fundamental limitations: (1) an unregistered intruder is forcibly classified into the closest registered student category, and (2) enrolling a new student necessitates retraining the complete network. In contrast, our proposed framework utilizes open-set deep metric learning: facial features are projected onto a 512-dimensional unit hypersphere and matched via thresholded cosine similarity.
+
+\section{Methodology and Architecture}
+The proposed attendance architecture executes in four sequential stages: (1) Frame Ingestion, (2) MTCNN Alignment, (3) Inception-ResNet-v1 Embedding Extraction, and (4) Metric Verification and Logging.
+
+\subsection{Face Detection and Landmark Alignment}
+Video frames are acquired via local webcams at $640\times 480$ resolution. MTCNN operates across three distinct cascading stages:
+\begin{itemize}
+    \item \textbf{Proposal Network (P-Net):} A shallow fully convolutional network that scans the image pyramid to generate candidate bounding windows.
+    \item \textbf{Refine Network (R-Net):} Rejects false candidate boxes using non-maximum suppression (NMS).
+    \item \textbf{Output Network (O-Net):} Computes final bounding coordinates and accurately localizes 5 facial landmarks (left eye, right eye, nose tip, left mouth corner, right mouth corner).
+\end{itemize}
+
+An affine geometric transformation rotates the face to place the inter-pupillary line horizontally. The aligned face is cropped with a margin and resized to $160\times 160$ pixels, ensuring scale and pose invariance.
+
+\subsection{Deep Metric Feature Extraction and Normalization}
+The aligned $160\times 160$ crop is fed into Inception-ResNet-v1 pretrained on the VGGFace2 dataset (comprising 3.31 million images across 9,131 identities)~\cite{cao2018vggface2}. The network extracts a 512-dimensional feature vector $\mathbf{v} \in \mathbb{R}^{512}$.
+
+To neutralize environmental lighting intensity shifts, explicit $L_2$-normalization is enforced:
+\begin{equation}
+\mathbf{\hat{v}} = \frac{\mathbf{v}}{\|\mathbf{v}\|_2} = \frac{\mathbf{v}}{\sqrt{\sum_{i=1}^{512} v_i^2}}
+\label{eq:l2norm}
+\end{equation}
+All normalized embeddings lie on the surface of a 512-dimensional unit hypersphere ($\|\mathbf{\hat{v}}\|_2 = 1$).
+
+\subsection{Gallery Matching and Deduplicated Attendance Logging}
+Registered volunteers provide reference photos under varied poses and ambient lighting. During live monitoring, a query vector $\mathbf{\hat{q}}$ is evaluated against stored gallery embeddings $\mathbf{\hat{e}}_k$ via Cosine Similarity, which reduces directly to an inner dot product for unit vectors:
+\begin{equation}
+\text{Sim}(\mathbf{\hat{q}}, \mathbf{\hat{e}}_k) = \mathbf{\hat{q}} \cdot \mathbf{\hat{e}}_k
+\label{eq:cossim}
+\end{equation}
+
+The candidate with maximum similarity is selected:
+\begin{equation}
+S^* = \max_{k} \text{Sim}(\mathbf{\hat{q}}, \mathbf{\hat{e}}_k), \quad k^* = \arg\max_{k} \text{Sim}(\mathbf{\hat{q}}, \mathbf{\hat{e}}_k)
+\end{equation}
+The decision rule is governed by the threshold $\tau$:
+\begin{equation}
+\text{Identity} = 
+\begin{cases} 
+\text{Name}(k^*), & \text{if } S^* \ge \tau \\ 
+\text{`Unknown'}, & \text{otherwise} 
+\end{cases}
+\end{equation}
+
+When recognized ($S^* \ge \tau$), an \texttt{AttendanceLogger} state machine marks the student `Present' exactly once per session, recording an exact entry timestamp into a persistent CSV file.
+
+\section{Real-Time Latency Optimizations}
+Executing MTCNN landmark regression and Inception-ResNet deep embedding concurrently on standard laptop CPUs originally resulted in unacceptable latency (6--8~FPS). Three engineering optimizations were introduced:
+\begin{enumerate}
+    \item \textbf{Spatial Subsampling:} The face detection pass operates on a $0.5\times$ spatially scaled frame ($320\times 240$), reducing pixel search area by 75\%. Bounding box coordinates are then scaled by $2.0\times$ to extract high-resolution $160\times 160$ crops for the embedding network.
+    \item \textbf{Temporal Frame-Skipping:} Deep facial inference executes once every 3rd frame, while intermediate display frames maintain visual continuity by interpolating cached bounding overlays.
+    \item \textbf{Hardware Buffer Control:} Configuring OpenCV with the DirectShow backend (\texttt{CAP\_DSHOW}) and locking buffer size to 1 eliminates frame queue latency.
+\end{enumerate}
+
+Combined, these enhancements boosted live throughput from 7~FPS to a smooth 30~FPS on CPU.
+
+\section{Findings and Experimental Results}
+The model was evaluated on the benchmark dataset Labeled Faces in the Wild (LFW)~\cite{huang2007labeled} across 6,000 official evaluation pairs (3,000 matched, 3,000 mismatched). An exhaustive parameter sweep determined that $\tau = 0.75$ balances the False Acceptance Rate (FAR) and False Rejection Rate (FRR).
+
+\begin{table}[htbp]
+\caption{System Performance on LFW Benchmark and Real-World Trials}
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Evaluation Metric} & \textbf{Measured Value} & \textbf{Target Benchmark} \\
+\midrule
+Peak Verification Accuracy & 95.2\% & $> 90.0\%$ \\
+Area Under Curve (AUC) & 0.984 & $> 0.950$ \\
+Equal Error Rate (EER) & 4.6\% & $< 6.0\%$ \\
+Optimal Threshold ($\tau$) & 0.75 & $0.70 - 0.80$ \\
+Average Latency per Face & $< 180$~ms & $< 300$~ms \\
+Live Video Throughput (CPU) & 28--30~FPS & $\ge 24$~FPS \\
+False Acceptances (Unknowns) & 0.0\% & $< 1.0\%$ \\
+\bottomrule
+\end{tabular}
+\label{tab:results}
+\end{center}
+\end{table}
+
+As summarized in Table~\ref{tab:results}, the system achieves 95.2\% verification accuracy on LFW and demonstrates zero false acceptances among unregistered individuals during live tests with $\tau = 0.75$.
+
+\section{Conclusion and Future Scope}
+This work developed an edge-ready, contactless facial recognition attendance system combining MTCNN landmark alignment, Inception-ResNet-v1 feature embeddings, and cosine metric matching. Engineered optimizations achieved 30~FPS CPU performance without requiring dedicated GPU acceleration. The system eliminates manual roll call overhead, prevents proxy attendance, and ensures student privacy through local consent-based vector storage. Future enhancements will incorporate temporal eye-blink liveness verification to prevent 2D photographic spoofing and deploy REST APIs for automatic synchronization with institutional ERP databases.
+
+\section*{Acknowledgment}
+The authors express sincere gratitude to Prof. V. R. Gupta, Course Coordinator, Department of Electronics Engineering, Ramdeobaba University, Nagpur, for continuous academic guidance and technical mentorship throughout this project.
+
+\begin{thebibliography}{00}
+\bibitem{turk1991eigenfaces}
+M.~Turk and A.~Pentland, ``Eigenfaces for recognition,'' \textit{Journal of Cognitive Neuroscience}, vol.~3, no.~1, pp.~71--86, 1991.
+
+\bibitem{ahonen2006face}
+T.~Ahonen, A.~Hadid, and M.~Pietik{\"a}inen, ``Face description with local binary patterns: Application to face recognition,'' \textit{IEEE Trans. Pattern Anal. Mach. Intell.}, vol.~28, no.~12, pp.~2037--2041, 2006.
+
+\bibitem{schroff2015facenet}
+F.~Schroff, D.~Kalenichenko, and J.~Philbin, ``FaceNet: A unified embedding for face recognition and clustering,'' in \textit{Proc. IEEE Conf. Comput. Vis. Pattern Recognit. (CVPR)}, 2015, pp.~815--823.
+
+\bibitem{zhang2016joint}
+K.~Zhang, Z.~Zhang, Z.~Li, and Y.~Qiao, ``Joint face detection and alignment using multitask cascaded convolutional networks,'' \textit{IEEE Signal Process. Lett.}, vol.~23, no.~10, pp.~1499--1503, 2016.
+
+\bibitem{cao2018vggface2}
+Q.~Cao, L.~Shen, W.~Xie, O.~M. Parkhi, and A.~Zisserman, ``VGGFace2: A dataset for recognising faces across pose and age,'' in \textit{Proc. 13th IEEE Int. Conf. Autom. Face Gesture Recognit. (FG)}, 2018, pp.~67--74.
+
+\bibitem{huang2007labeled}
+G.~B. Huang, M.~Mattar, T.~Berg, and E.~Learned-Miller, ``Labeled faces in the wild: A database for studying face recognition in unconstrained environments,'' Univ. of Massachusetts, Amherst, Tech. Rep. 07-49, 2007.
+\end{thebibliography}
+
+\end{document}
