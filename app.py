@@ -367,12 +367,10 @@ with st.sidebar:
 # Organized Main Navigation Tabs
 # ─────────────────────────────────────────────────────────────────────────────
 
-tab_live, tab_reports, tab_enroll, tab_lfw, tab_proposal = st.tabs([
+tab_live, tab_reports, tab_enroll = st.tabs([
     "📹 Live Attendance",
     "📊 Attendance Reports",
-    "👥 Participant Enrollment",
-    "🧪 Model Benchmark (LFW)",
-    "📑 Project Proposal & Architecture"
+    "👥 Participant Enrollment"
 ])
 
 
@@ -822,83 +820,4 @@ with tab_enroll:
         st.markdown("</div>", unsafe_allow_html=True)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — LFW BENCHMARK & EXPERIMENTAL VALIDATION
-# ══════════════════════════════════════════════════════════════════════════════
 
-with tab_lfw:
-    st.markdown("""
-    <div class="content-card">
-        <h3>Labeled Faces in the Wild (LFW) Verification Benchmark</h3>
-        <p style="font-size: 0.9rem; color: #64748B;">
-            LFW tests 6,000 face pairs (3,000 matched, 3,000 mismatched) to evaluate model generalizability, 
-            ROC curves, AUC, and determine the optimal cosine similarity threshold τ (minimizing False Accept and False Reject rates).
-        </p>
-    """, unsafe_allow_html=True)
-
-    lfw_dir   = "data/lfw"
-    pairs_txt = "data/lfw/pairs.txt"
-    lfw_ready = os.path.isdir(lfw_dir) and os.path.exists(pairs_txt)
-
-    if not lfw_ready:
-        st.info("LFW dataset folder or `pairs.txt` is not currently present in `data/lfw/`. Using optimal pre-validated threshold τ = 0.70.")
-    else:
-        if st.button("🚀 Execute LFW Verification Run", key="btn_run_lfw"):
-            from src.lfw_experiment import run_experiment
-            with st.spinner("Processing LFW pairs..."):
-                run_experiment(lfw_dir=lfw_dir, pairs_file=pairs_txt, output_dir=GALLERY_DIR)
-            st.success("Evaluation complete!")
-            st.rerun()
-
-    if os.path.exists(LFW_RESULTS):
-        st.image(LFW_RESULTS, caption="ROC Curve & Cosine Similarity Distribution", width="stretch")
-        tau_val = load_threshold(GALLERY_DIR, default=0.70)
-        st.metric("Validated Optimal Threshold", f"{tau_val:.4f}")
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 5 — PROJECT PROPOSAL & ARCHITECTURE
-# ══════════════════════════════════════════════════════════════════════════════
-
-with tab_proposal:
-    st.markdown("""
-    <div class="content-card">
-        <h3>1. Problem Statement and Motivation</h3>
-        <p>
-            Marking attendance manually is slow, repetitive, and often unreliable. In classrooms and labs, it can even 
-            lead to proxy attendance. Our project aims to solve this by building a smart attendance prototype 
-            powered by face recognition. The system detects faces, generates deep learning based embeddings, 
-            and matches them against a small database of volunteers who have given consent. If a face doesn’t match, 
-            it is marked as <b>Unknown</b>. This prototype demonstrates how AI makes attendance seamless, 
-            accurate, and secure in controlled environments, while keeping privacy at the forefront.
-        </p>
-    </div>
-
-    <div class="content-card">
-        <h3>2. Project Objectives</h3>
-        <ol style="line-height: 1.8; color: #334155;">
-            <li><b>Real-time Detection:</b> Build a real-time system that detects faces from a live camera feed.</li>
-            <li><b>Embedding Extraction:</b> Extract normalized face embeddings using a pretrained Deep Learning model (InceptionResnetV1 / VGGFace2).</li>
-            <li><b>Automated Logging:</b> Automatically log attendance with participant name, date, and exact timestamp.</li>
-            <li><b>Threshold Recognition:</b> Recognize enrolled participants using cosine similarity while rejecting unknown faces below threshold τ.</li>
-        </ol>
-    </div>
-
-    <div class="content-card">
-        <h3>3. Dataset & Preprocessing</h3>
-        <ul style="line-height: 1.8; color: #334155;">
-            <li><b>Labeled Faces in the Wild (LFW):</b> Over 13,000 labeled images used for threshold validation and ROC analysis.</li>
-            <li><b>Consent-Based Local Dataset:</b> Multiple photos per enrolled volunteer captured under different poses and lighting conditions.</li>
-            <li><b>Preprocessing:</b> 5-point facial landmark alignment, margin padding, and normalization to [-1, 1] range.</li>
-        </ul>
-    </div>
-
-    <div class="content-card">
-        <h3>4. Proposed Pipeline Architecture</h3>
-        <div style="background: #F1F5F9; border-radius: 10px; padding: 18px; font-family: monospace; font-size: 0.9rem; margin-top: 10px;">
-            Webcam Input ──▶ MTCNN Alignment ──▶ InceptionResnetV1 (512-D) ──▶ Cosine Similarity vs Gallery ──▶ CSV Attendance Log
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
