@@ -360,25 +360,7 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Top Hero Banner
-# ─────────────────────────────────────────────────────────────────────────────
 
-st.markdown("""
-<div class="hero-banner">
-    <div>
-        <div class="hero-badge">Deep Learning Lab • Capstone Project • Semester V</div>
-        <h1 style="margin-top: 10px;">Smart Face Recognition Attendance System</h1>
-        <p>Real-time edge-ready attendance logging powered by MTCNN alignment and InceptionResnetV1 metric learning.</p>
-    </div>
-    <div style="display: flex; gap: 12px;">
-        <div style="text-align: right; background: rgba(0,0,0,0.15); padding: 12px 18px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.15);">
-            <div style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: #E0E7FF;">Backend Engine</div>
-            <div style="font-size: 1.1rem; font-weight: 700;">PyTorch + FaceNet</div>
-        </div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
